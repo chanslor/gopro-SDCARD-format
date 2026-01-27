@@ -2,6 +2,12 @@
 
 Prepare an SD card for GoPro Hero13 on Ubuntu Linux.
 
+## Why this exists
+
+Since the fall of 2019, starting with the Hero8, I have dealt with persistent SD card errors across multiple GoPro cameras. The cards have always been top-of-the-line SanDisk Extreme Pro — and I have always formatted exclusively through the GoPro's built-in UI. After extensive research and trial and error, I believe the root cause is GoPro's in-camera "quick format," which does not write a fresh partition table or perform a full format. This script replaces that process entirely by writing a clean msdos partition table and performing a proper exFAT format from a Linux workstation.
+
+## Overview
+
 Automates the full wipe-and-format workflow: device detection, partition table creation, and exFAT formatting with the `GOPRO` volume label.
 
 ![SD Card](sdcard.jpeg)
