@@ -80,6 +80,9 @@ echo "============================================"
 echo ""
 lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,MODEL,TRAN "$DEV"
 echo ""
+echo ">> Partition table:"
+parted "$DEV" print free 2>/dev/null || echo "   (no partition table found)"
+echo ""
 echo "WARNING: ALL DATA ON $DEV WILL BE DESTROYED."
 read -rp "Type YES to continue: " confirm
 if [[ "$confirm" != "YES" ]]; then
@@ -99,9 +102,28 @@ done
 # --- Step 2 (optional): Bad block check ---
 if [[ "$BAD_BLOCKS" -eq 1 ]]; then
     echo ""
-    echo ">> Checking for bad blocks (read-only test)..."
-    badblocks -sv "$DEV"
-    echo "   Bad block check complete."
+    echo ">> Checking for bad blocks (destructive write test)..."
+    echo "   This writes test patterns to every sector and verifies them."
+    BB_OUT=$(mktemp)
+    badblocks -wsv -o "$BB_OUT" "$DEV"
+    BB_COUNT=$(wc -l < "$BB_OUT")
+    if [[ "$BB_COUNT" -gt 0 ]]; then
+        echo ""
+        echo "   WARNING: $BB_COUNT bad block(s) found!"
+        echo "   SD cards use internal wear-leveling — bad blocks surfacing"
+        echo "   to the OS means the card's controller has exhausted its"
+        echo "   spare sectors. This card should be REPLACED."
+        cat "$BB_OUT"
+        rm -f "$BB_OUT"
+        read -rp "   Continue formatting anyway? (YES/no): " bb_confirm
+        if [[ "$bb_confirm" != "YES" ]]; then
+            echo "Aborted."
+            exit 1
+        fi
+    else
+        echo "   No bad blocks found."
+        rm -f "$BB_OUT"
+    fi
 fi
 
 # --- Step 3: Write msdos partition table + single partition ---
