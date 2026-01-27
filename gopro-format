@@ -1,0 +1,133 @@
+#!/bin/bash
+#
+# gopro-format - Prepare an SD card for GoPro Hero13
+#
+# Usage: gopro-format [-b] [device]
+#   -b        Check for bad blocks before formatting
+#   device    Block device (e.g. /dev/sda). Auto-detected if omitted.
+
+set -euo pipefail
+
+BAD_BLOCKS=0
+
+usage() {
+    echo "Usage: $(basename "$0") [-b] [device]"
+    echo "  -b        Check for bad blocks before formatting"
+    echo "  device    Block device (e.g. /dev/sda). Auto-detected if omitted."
+    exit 1
+}
+
+while getopts "bh" opt; do
+    case "$opt" in
+        b) BAD_BLOCKS=1 ;;
+        h) usage ;;
+        *) usage ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+# --- Must be root ---
+if [[ $EUID -ne 0 ]]; then
+    echo "ERROR: Must run as root (use sudo)."
+    exit 1
+fi
+
+# --- Find device ---
+if [[ $# -ge 1 ]]; then
+    DEV="$1"
+else
+    # Auto-detect: look for removable SD-card-sized devices
+    CANDIDATES=()
+    for d in /sys/block/sd* /sys/block/mmcblk*; do
+        [[ -e "$d" ]] || continue
+        devname="/dev/$(basename "$d")"
+        removable=$(cat "$d/removable" 2>/dev/null || echo 0)
+        # Accept removable disks, or mmcblk devices (always removable media)
+        if [[ "$removable" == "1" ]] || [[ "$(basename "$d")" == mmcblk* ]]; then
+            CANDIDATES+=("$devname")
+        fi
+    done
+
+    if [[ ${#CANDIDATES[@]} -eq 0 ]]; then
+        echo "ERROR: No removable SD card device found."
+        echo "Insert the card or specify the device manually: $(basename "$0") /dev/sdX"
+        exit 1
+    elif [[ ${#CANDIDATES[@]} -eq 1 ]]; then
+        DEV="${CANDIDATES[0]}"
+    else
+        echo "Multiple removable devices found:"
+        for i in "${!CANDIDATES[@]}"; do
+            echo "  [$i] ${CANDIDATES[$i]}"
+        done
+        read -rp "Select device number: " sel
+        DEV="${CANDIDATES[$sel]}"
+    fi
+fi
+
+# Strip trailing partition number so we always have the whole-disk device
+DEV="${DEV%[0-9]}"
+DEV="${DEV%p}"  # handle mmcblk0p1 -> mmcblk0
+
+if [[ ! -b "$DEV" ]]; then
+    echo "ERROR: $DEV is not a block device."
+    exit 1
+fi
+
+# --- Step 1: Display device info for confirmation ---
+echo "============================================"
+echo "  SD Card Device: $DEV"
+echo "============================================"
+echo ""
+lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,MODEL,TRAN "$DEV"
+echo ""
+echo "WARNING: ALL DATA ON $DEV WILL BE DESTROYED."
+read -rp "Type YES to continue: " confirm
+if [[ "$confirm" != "YES" ]]; then
+    echo "Aborted."
+    exit 1
+fi
+
+# Unmount any mounted partitions
+echo ""
+echo ">> Unmounting any mounted partitions..."
+for part in "${DEV}"*; do
+    if mountpoint -q "$part" 2>/dev/null || mount | grep -q "^$part "; then
+        umount "$part" && echo "   Unmounted $part"
+    fi
+done
+
+# --- Step 2 (optional): Bad block check ---
+if [[ "$BAD_BLOCKS" -eq 1 ]]; then
+    echo ""
+    echo ">> Checking for bad blocks (read-only test)..."
+    badblocks -sv "$DEV"
+    echo "   Bad block check complete."
+fi
+
+# --- Step 3: Write msdos partition table + single partition ---
+echo ""
+echo ">> Creating msdos partition table on $DEV..."
+
+# Determine partition device name (sda -> sda1, mmcblk0 -> mmcblk0p1)
+if [[ "$DEV" == *mmcblk* ]]; then
+    PART="${DEV}p1"
+else
+    PART="${DEV}1"
+fi
+
+parted -s "$DEV" mklabel msdos
+parted -s "$DEV" mkpart primary 1MiB 100%
+
+# Let kernel pick up the new table
+partprobe "$DEV"
+sleep 1
+
+# --- Step 4: Format exFAT with GOPRO label ---
+echo ">> Formatting ${PART} as exFAT (label: GOPRO)..."
+mkfs.exfat -L 'GOPRO' "$PART"
+
+echo ""
+echo "============================================"
+echo "  Done. SD card is ready for GoPro Hero13."
+echo "============================================"
+lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL "$DEV"
