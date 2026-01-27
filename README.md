@@ -4,6 +4,8 @@ Prepare an SD card for GoPro Hero13 on Ubuntu Linux.
 
 Automates the full wipe-and-format workflow: device detection, partition table creation, and exFAT formatting with the `GOPRO` volume label.
 
+![SD Card](sdcard.jpeg)
+
 ## Usage
 
 ```bash
