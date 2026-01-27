@@ -2,29 +2,158 @@
 #
 # gopro-format - Prepare an SD card for GoPro Hero13
 #
-# Usage: gopro-format [-b] [device]
-#   -b        Check for bad blocks before formatting
-#   device    Block device (e.g. /dev/sda). Auto-detected if omitted.
+# Usage: gopro-format [-b] [-c [LABEL]] [-l] [device]
+#   -b           Check for bad blocks before formatting
+#   -c [LABEL]   Check when a card was formatted (reads card label or specify one)
+#   -l           List full format history
+#   device       Block device (e.g. /dev/sda). Auto-detected if omitted.
 
 set -euo pipefail
 
 BAD_BLOCKS=0
+CHECK_MODE=0
+CHECK_LABEL=""
+LIST_MODE=0
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+LOG_FILE="$SCRIPT_DIR/gopro-format.log"
 
 usage() {
-    echo "Usage: $(basename "$0") [-b] [device]"
-    echo "  -b        Check for bad blocks before formatting"
-    echo "  device    Block device (e.g. /dev/sda). Auto-detected if omitted."
+    echo "Usage: $(basename "$0") [-b] [-c [LABEL]] [-l] [device]"
+    echo "  -b           Check for bad blocks before formatting"
+    echo "  -c [LABEL]   Check when a card was formatted (reads card label or specify one)"
+    echo "  -l           List full format history"
+    echo "  device       Block device (e.g. /dev/sda). Auto-detected if omitted."
     exit 1
 }
 
-while getopts "bh" opt; do
-    case "$opt" in
-        b) BAD_BLOCKS=1 ;;
-        h) usage ;;
-        *) usage ;;
+# --- Manual argument parsing (getopts can't handle optional args well) ---
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -b)
+            BAD_BLOCKS=1
+            shift
+            ;;
+        -c)
+            CHECK_MODE=1
+            shift
+            # If next arg exists and doesn't start with - and isn't a block device path, treat as label
+            if [[ $# -gt 0 && "$1" != -* && "$1" != /dev/* ]]; then
+                CHECK_LABEL="$1"
+                shift
+            fi
+            ;;
+        -l)
+            LIST_MODE=1
+            shift
+            ;;
+        -h|--help)
+            usage
+            ;;
+        -*)
+            echo "Unknown option: $1"
+            usage
+            ;;
+        *)
+            # Positional arg — device
+            DEV="$1"
+            shift
+            ;;
     esac
 done
-shift $((OPTIND - 1))
+
+# --- Handle -l: list full format history ---
+if [[ "$LIST_MODE" -eq 1 ]]; then
+    if [[ ! -f "$LOG_FILE" ]]; then
+        echo "No format history found."
+    else
+        echo "Format history ($LOG_FILE):"
+        echo ""
+        cat "$LOG_FILE"
+    fi
+    exit 0
+fi
+
+# --- Handle -c: check/lookup mode ---
+if [[ "$CHECK_MODE" -eq 1 ]]; then
+    if [[ -n "$CHECK_LABEL" ]]; then
+        # Look up the given label in the log
+        if [[ ! -f "$LOG_FILE" ]]; then
+            echo "No format history found."
+            exit 0
+        fi
+        MATCHES=$(grep "$CHECK_LABEL" "$LOG_FILE" || true)
+        if [[ -z "$MATCHES" ]]; then
+            echo "No entries found for label: $CHECK_LABEL"
+        else
+            echo "Entries for $CHECK_LABEL:"
+            echo ""
+            echo "$MATCHES"
+        fi
+    else
+        # Auto-detect card and read its label
+        # Need root to detect devices reliably
+        if [[ $EUID -ne 0 ]]; then
+            echo "ERROR: Must run as root to auto-detect card (use sudo), or specify a label: -c LABEL"
+            exit 1
+        fi
+
+        # --- Find device (same auto-detect logic) ---
+        if [[ -z "${DEV:-}" ]]; then
+            CANDIDATES=()
+            for d in /sys/block/sd* /sys/block/mmcblk*; do
+                [[ -e "$d" ]] || continue
+                devname="/dev/$(basename "$d")"
+                removable=$(cat "$d/removable" 2>/dev/null || echo 0)
+                if [[ "$removable" == "1" ]] || [[ "$(basename "$d")" == mmcblk* ]]; then
+                    CANDIDATES+=("$devname")
+                fi
+            done
+
+            if [[ ${#CANDIDATES[@]} -eq 0 ]]; then
+                echo "ERROR: No removable SD card device found."
+                exit 1
+            elif [[ ${#CANDIDATES[@]} -eq 1 ]]; then
+                DEV="${CANDIDATES[0]}"
+            else
+                echo "Multiple removable devices found:"
+                for i in "${!CANDIDATES[@]}"; do
+                    echo "  [$i] ${CANDIDATES[$i]}"
+                done
+                read -rp "Select device number: " sel
+                DEV="${CANDIDATES[$sel]}"
+            fi
+        fi
+
+        # Read label from the device's first partition
+        if [[ "$DEV" == *mmcblk* ]]; then
+            PART="${DEV}p1"
+        else
+            PART="${DEV}1"
+        fi
+
+        CARD_LABEL=$(lsblk -ndo LABEL "$PART" 2>/dev/null || true)
+        if [[ -z "$CARD_LABEL" ]]; then
+            echo "Could not read label from $PART"
+            exit 1
+        fi
+
+        echo "Card label: $CARD_LABEL"
+        echo ""
+
+        if [[ ! -f "$LOG_FILE" ]]; then
+            echo "No format history found."
+            exit 0
+        fi
+
+        MATCHES=$(grep "$CARD_LABEL" "$LOG_FILE" || true)
+        if [[ -z "$MATCHES" ]]; then
+            echo "No entries found for label: $CARD_LABEL"
+        else
+            echo "$MATCHES"
+        fi
+    fi
+    exit 0
+fi
 
 # --- Must be root ---
 if [[ $EUID -ne 0 ]]; then
@@ -33,9 +162,7 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 # --- Find device ---
-if [[ $# -ge 1 ]]; then
-    DEV="$1"
-else
+if [[ -z "${DEV:-}" ]]; then
     # Auto-detect: look for removable SD-card-sized devices
     CANDIDATES=()
     for d in /sys/block/sd* /sys/block/mmcblk*; do
@@ -73,9 +200,19 @@ if [[ ! -b "$DEV" ]]; then
     exit 1
 fi
 
+# --- Generate dynamic label ---
+TODAY=$(date +%y%m%d)
+SEQ=1
+if [[ -f "$LOG_FILE" ]]; then
+    COUNT=$(grep -c "$TODAY" "$LOG_FILE" || true)
+    SEQ=$((COUNT + 1))
+fi
+LABEL="GP${TODAY}$(printf '%02d' "$SEQ")"
+
 # --- Step 1: Display device info for confirmation ---
 echo "============================================"
 echo "  SD Card Device: $DEV"
+echo "  Label: $LABEL"
 echo "============================================"
 echo ""
 lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,MODEL,TRAN "$DEV"
@@ -144,12 +281,19 @@ parted -s "$DEV" mkpart primary 1MiB 100%
 partprobe "$DEV"
 sleep 1
 
-# --- Step 4: Format exFAT with GOPRO label ---
-echo ">> Formatting ${PART} as exFAT (label: GOPRO)..."
-mkfs.exfat -L 'GOPRO' "$PART"
+# --- Step 4: Format exFAT with dynamic label ---
+echo ">> Formatting ${PART} as exFAT (label: $LABEL)..."
+mkfs.exfat -L "$LABEL" "$PART"
+
+# --- Step 5: Log the format ---
+DEV_SIZE=$(lsblk -ndo SIZE "$DEV" | tr -d ' ')
+DEV_MODEL=$(lsblk -ndo MODEL "$DEV" | sed 's/  */ /g; s/^ //; s/ $//')
+TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+echo "$TIMESTAMP | $LABEL | $DEV | $DEV_SIZE | $DEV_MODEL" >> "$LOG_FILE"
 
 echo ""
 echo "============================================"
 echo "  Done. SD card is ready for GoPro Hero13."
+echo "  Label: $LABEL"
 echo "============================================"
 lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL "$DEV"
