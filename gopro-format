@@ -2,8 +2,9 @@
 #
 # gopro-format - Prepare an SD card for GoPro Hero13
 #
-# Usage: gopro-format [-b] [-c [LABEL]] [-l] [device]
+# Usage: gopro-format [-b] [-f] [-c [LABEL]] [-l] [device]
 #   -b           Check for bad blocks before formatting
+#   -f           Check for fake/counterfeit flash (f3probe)
 #   -c [LABEL]   Check when a card was formatted (reads card label or specify one)
 #   -l           List full format history
 #   device       Block device (e.g. /dev/sda). Auto-detected if omitted.
@@ -11,6 +12,7 @@
 set -euo pipefail
 
 BAD_BLOCKS=0
+FAKE_CHECK=0
 CHECK_MODE=0
 CHECK_LABEL=""
 LIST_MODE=0
@@ -18,8 +20,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOG_FILE="$SCRIPT_DIR/gopro-format.log"
 
 usage() {
-    echo "Usage: $(basename "$0") [-b] [-c [LABEL]] [-l] [device]"
+    echo "Usage: $(basename "$0") [-b] [-f] [-c [LABEL]] [-l] [device]"
     echo "  -b           Check for bad blocks before formatting"
+    echo "  -f           Check for fake/counterfeit flash (f3probe)"
     echo "  -c [LABEL]   Check when a card was formatted (reads card label or specify one)"
     echo "  -l           List full format history"
     echo "  device       Block device (e.g. /dev/sda). Auto-detected if omitted."
@@ -31,6 +34,10 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         -b)
             BAD_BLOCKS=1
+            shift
+            ;;
+        -f)
+            FAKE_CHECK=1
             shift
             ;;
         -c)
@@ -260,6 +267,32 @@ if [[ "$BAD_BLOCKS" -eq 1 ]]; then
     else
         echo "   No bad blocks found."
         rm -f "$BB_OUT"
+    fi
+fi
+
+# --- Step 2b (optional): Fake flash check ---
+if [[ "$FAKE_CHECK" -eq 1 ]]; then
+    echo ""
+    echo ">> Checking for fake/counterfeit flash (f3probe)..."
+    echo "   This probes the device to detect cards that misreport their capacity."
+    if ! command -v f3probe &>/dev/null; then
+        echo "   ERROR: f3probe not found. Install with: sudo apt install f3"
+        exit 1
+    fi
+    F3_OUT=$(f3probe --destructive "$DEV" 2>&1) || true
+    echo "$F3_OUT"
+    if echo "$F3_OUT" | grep -qi "counterfeit\|fake"; then
+        echo ""
+        echo "   WARNING: This card appears to be COUNTERFEIT!"
+        echo "   The reported capacity does not match the real storage."
+        echo "   This card should be REPLACED."
+        read -rp "   Continue formatting anyway? (YES/no): " f3_confirm
+        if [[ "$f3_confirm" != "YES" ]]; then
+            echo "Aborted."
+            exit 1
+        fi
+    else
+        echo "   Card appears genuine."
     fi
 fi
 
