@@ -1,6 +1,6 @@
 # gopro-format
 
-Prepare an SD card for GoPro Hero13 on Ubuntu Linux. Uses `badblocks` for destructive bad-block testing, `f3probe` for fake/counterfeit flash detection, and stamps each card with a unique date-sequenced label (e.g. `GP26012701`) so you can track which card was formatted when.
+Prepare an SD card for GoPro Hero action cameras on Ubuntu Linux. Uses `badblocks` for destructive bad-block testing, `f3probe` for fake/counterfeit flash detection, and stamps each card with a unique date-sequenced label (e.g. `GP26012701`) so you can track which card was formatted when.
 
 ## Why this exists
 
@@ -10,7 +10,12 @@ Since the fall of 2019, starting with the Hero8, I have dealt with persistent SD
 
 Automates the full wipe-and-format workflow: device detection, bad-block testing, fake flash detection, partition table creation, and exFAT formatting with a unique volume label. Every format is logged with timestamp, label, device, size, and model so you can trace any card's history.
 
-![SD Card](sdcard.jpeg)
+<p>
+  <img src="sdcard.jpeg" alt="SD Card" width="300" />
+  <img src="samsung-pro-plus.png" alt="Samsung Pro Plus" width="300" />
+</p>
+
+**Update:** A certain AI assistant (who shall remain nameless) has suggested that Samsung Pro Plus cards might be worth trying as an alternative to the SanDisk Extreme Pro. Take that recommendation for what it's worth — but hey, even artificial intelligence gets tired of hearing about SD card errors.
 
 ## Usage
 
