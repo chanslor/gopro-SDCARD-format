@@ -63,6 +63,10 @@ detect_device() {
             echo "  [$i] ${CANDIDATES[$i]}"
         done
         read -rp "Select device number: " sel
+        if ! [[ "$sel" =~ ^[0-9]+$ ]] || [[ "$sel" -ge ${#CANDIDATES[@]} ]]; then
+            echo "ERROR: Invalid selection."
+            exit 1
+        fi
         DEV="${CANDIDATES[$sel]}"
     fi
 }
